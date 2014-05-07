@@ -145,7 +145,6 @@ const (
 // Precompute the reflect type for error.  Can't use error directly
 // because Typeof takes an empty interface value.  This is annoying.
 var typeOfError = reflect.TypeOf((*error)(nil)).Elem()
-var typeOfEvent = reflect.TypeOf((*Event)(nil))
 
 type methodType struct {
 	sync.Mutex // protects counters
@@ -174,7 +173,7 @@ const (
 type Request struct {
 	ServiceMethod string   // format: "Service.Method"
 	Seq           uint64   // sequence number chosen by client
-	Typ           int      // sub type
+	IsSub         bool     // sub type
 	next          *Request // for free list in Server
 }
 
@@ -192,9 +191,6 @@ type Response struct {
 type Server struct {
 	mu         sync.RWMutex // protects the serviceMap
 	serviceMap map[string]*service
-	eLock      sync.Mutex // protects eventHandleMap
-	eventMap   map[uint64]*Event
-	eventHMap  map[uint64]int
 	reqLock    sync.Mutex // protects freeReq
 	freeReq    *Request
 	respLock   sync.Mutex // protects freeResp
@@ -250,12 +246,6 @@ func (server *Server) register(rcvr interface{}, name string, useName bool) erro
 	if server.serviceMap == nil {
 		server.serviceMap = make(map[string]*service)
 	}
-	if server.eventHMap == nil {
-		server.eventHMap = make(map[uint64]int)
-	}
-	if server.eventMap == nil {
-		server.eventMap = make(map[uint64]*Event)
-	}
 	s := new(service)
 	s.typ = reflect.TypeOf(rcvr)
 	s.rcvr = reflect.ValueOf(rcvr)
@@ -279,13 +269,7 @@ func (server *Server) register(rcvr interface{}, name string, useName bool) erro
 	s.name = sname
 
 	// Install the methods
-	s.method = suitableMethods(s.typ, false)
-
-	// install event method
-	events := suitableEvent(s.typ, false)
-	for k, v := range events {
-		s.method[k] = v
-	}
+	s.method = suitableMethods(s.typ, true)
 
 	if len(s.method) == 0 {
 		str := ""
@@ -304,6 +288,7 @@ func (server *Server) register(rcvr interface{}, name string, useName bool) erro
 	return nil
 }
 
+/*
 func suitableEvent(typ reflect.Type, reportErr bool) map[string]*methodType {
 	methods := make(map[string]*methodType)
 	for m := 0; m < typ.NumMethod(); m++ {
@@ -356,6 +341,7 @@ func suitableEvent(typ reflect.Type, reportErr bool) map[string]*methodType {
 	}
 	return methods
 }
+*/
 
 // suitableMethods returns suitable Rpc methods of typ, it will report
 // error using log if reportErr is true.
@@ -455,14 +441,17 @@ func (s *service) sub(server *Server, sending *sync.Mutex, mtype *methodType, re
 	mtype.numCalls++
 	mtype.Unlock()
 	function := mtype.method.Func
-	// Invoke the method, providing a new value for the reply.
-	returnValues := function.Call([]reflect.Value{s.rcvr, argv})
-	if len(returnValues) != 2 {
-		errmsg := "rpc.Sub error: the server func:" + mtype.method.Type.String() + "is not valid."
-		server.sendResponse(sending, req, nil, codec, errmsg)
+	// Invoke the method
+	f := func(v interface{}) {
+		server.sendResponse(sending, req, v, codec, "")
 	}
+	h := EventHandler(f)
+	callback := reflect.ValueOf(&h)
+	log.Println(callback, function)
+	returnValues := function.Call([]reflect.Value{s.rcvr, argv, callback})
+
 	// The return value for the method is an error.
-	errInter := returnValues[1].Interface()
+	errInter := returnValues[0].Interface()
 	errmsg := ""
 	if errInter != nil {
 		errmsg = errInter.(error).Error()
@@ -470,21 +459,7 @@ func (s *service) sub(server *Server, sending *sync.Mutex, mtype *methodType, re
 	if errmsg != "" {
 		server.sendResponse(sending, req, nil, codec, errmsg)
 	}
-	defer server.freeRequest(req)
-
-	ev := returnValues[0].Interface().(*Event)
-	if ev == nil {
-		return
-	}
-	if req.Typ == SubType {
-		h := ev.Attach(func(v interface{}) {
-			server.sendResponse(sending, req, v, codec, "") // send data v to client
-		})
-		server.eLock.Lock()
-		server.eventHMap[req.Seq] = h // save event handle for Detach
-		server.eventMap[req.Seq] = ev // save event for Detach
-		server.eLock.Unlock()
-	}
+	server.freeRequest(req)
 }
 
 func (s *service) call(server *Server, sending *sync.Mutex, mtype *methodType, req *Request, argv, replyv reflect.Value, codec ServerCodec) {
@@ -564,24 +539,10 @@ func (server *Server) ServeCodec(codec ServerCodec) {
 			}
 			continue
 		}
-		if req.Typ == NoSubType {
+		if !req.IsSub {
 			go service.call(server, sending, mtype, req, argv, replyv, codec)
 		} else {
-			if req.Typ == SubType {
-				go service.sub(server, sending, mtype, req, argv, codec)
-			} else if req.Typ == UnsubType {
-				go func() {
-					seq := argv.Interface().(uint64)
-					server.eLock.Lock()
-					h := server.eventHMap[seq]
-					delete(server.eventHMap, seq)
-					ev := server.eventMap[seq]
-					delete(server.eventMap, seq)
-					server.eLock.Unlock()
-					ev.Detach(h)
-					server.sendResponse(sending, req, struct{}{}, codec, "")
-				}()
-			}
+			go service.sub(server, sending, mtype, req, argv, codec)
 		}
 	}
 	codec.Close()
@@ -659,21 +620,16 @@ func (server *Server) readRequest(codec ServerCodec) (service *service, mtype *m
 	}
 
 	argIsValue := false // if true, need to indirect before calling.
-	if req.Typ == UnsubType {
-		argv = reflect.New(reflect.TypeOf(uint64(0)))
-		argIsValue = true
+	// Decode the argument value.
+	if mtype.ArgType.Kind() == reflect.Ptr {
+		argv = reflect.New(mtype.ArgType.Elem())
 	} else {
-		// Decode the argument value.
-		if mtype.ArgType.Kind() == reflect.Ptr {
-			argv = reflect.New(mtype.ArgType.Elem())
-		} else {
-			argv = reflect.New(mtype.ArgType)
-			argIsValue = true
-		}
-		if req.Typ == NoSubType {
-			replyv = reflect.New(mtype.ReplyType.Elem())
-		}
+		argv = reflect.New(mtype.ArgType)
+		argIsValue = true
 	}
+
+	replyv = reflect.New(mtype.ReplyType.Elem())
+
 	// argv guaranteed to be a pointer now.
 	if err = codec.ReadRequestBody(argv.Interface()); err != nil {
 		return

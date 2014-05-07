@@ -33,8 +33,7 @@ type Call struct {
 	Error         error               // After completion, the error status.
 	Done          chan *Call          // Strobes when call is complete.
 	callBack      func(v interface{}) // subscribe's CallBack function
-	typ           int
-	Seq           uint64 // == send to server request's seq
+	Seq           uint64              // == send to server request's seq
 }
 
 // Client represents an RPC Client.
@@ -91,7 +90,7 @@ func (client *Client) send(call *Call) {
 	client.request.Seq = seq
 	client.request.ServiceMethod = call.ServiceMethod
 	req := client.request
-	req.Typ = call.typ
+	req.IsSub = call.callBack != nil
 	err := client.codec.WriteRequest(&req, call.Args)
 	if err != nil {
 		client.mutex.Lock()
@@ -301,10 +300,10 @@ func (client *Client) Close() error {
 // the same Call object.  If done is nil, Go will allocate a new channel.
 // If non-nil, done must be buffered or Go will deliberately crash.
 func (client *Client) Go(serviceMethod string, args interface{}, reply interface{}, done chan *Call) *Call {
-	return client.gogo(serviceMethod, args, reply, done, 0, nil)
+	return client.gogo(serviceMethod, args, reply, done, nil)
 }
 
-func (client *Client) gogo(serviceMethod string, args interface{}, reply interface{}, done chan *Call, typ int, callBack func(data interface{})) *Call {
+func (client *Client) gogo(serviceMethod string, args interface{}, reply interface{}, done chan *Call, callBack func(data interface{})) *Call {
 	call := new(Call)
 	call.ServiceMethod = serviceMethod
 	call.Args = args
@@ -322,7 +321,6 @@ func (client *Client) gogo(serviceMethod string, args interface{}, reply interfa
 	}
 
 	call.callBack = callBack
-	call.typ = typ
 	call.Done = done
 	client.send(call)
 	return call
@@ -334,23 +332,7 @@ func (client *Client) Call(serviceMethod string, args interface{}, reply interfa
 	return call.Error
 }
 
-// GoSub is same with Sub, but it invokes asynchronously.
-func (client *Client) GoSub(serviceMethod string, args interface{}, reply interface{}, done chan *Call, callBack func(data interface{})) *Call {
-	return client.gogo(serviceMethod, args, reply, done, SubType, callBack)
-}
-
-// Sub is same with Call. but it subscribe the server service. when the server data recived, call callBack to deal with the data.
-// the data type is same with reply. return req is Sub handle use to Unsub.
-func (client *Client) Sub(serviceMethod string, args interface{}, reply interface{}, callBack func(data interface{})) (handle uint64, err error) {
-	call := <-client.gogo(serviceMethod, args, reply, make(chan *Call, 1), SubType, callBack).Done
-	return call.Seq, call.Error
-}
-
-// Unsub remove subscribe client callback
-func (client *Client) Unsub(serviceMethod string, handle uint64) error {
-	client.mutex.Lock()
-	delete(client.pending, handle)
-	client.mutex.Unlock()
-	call := <-client.gogo(serviceMethod, handle, nil, make(chan *Call, 1), UnsubType, nil).Done
+func (client *Client) Sub(serviceMethod string, args interface{}, reply interface{}, callback func(v interface{})) error {
+	call := <-client.gogo(serviceMethod, args, reply, make(chan *Call, 1), callback).Done
 	return call.Error
 }

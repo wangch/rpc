@@ -60,30 +60,6 @@ func (t *Arith) Div(args Args, reply *Reply) error {
 	return nil
 }
 
-var Fibs = []int{1, 1, 2, 3, 5, 8, 13}
-var index int
-
-type Pub struct {
-	fibPublisher EventPublisher
-}
-
-func (t *Pub) fib() error {
-	for {
-		time.Sleep(time.Second)
-		for _, f := range Fibs {
-			t.fibPublisher.Publish(f)
-			log.Println(f)
-		}
-	}
-	return nil
-}
-
-var pub *Pub
-
-func (t *Pub) Fib(a int) (*Event, error) {
-	return t.fibPublisher.Event(), nil
-}
-
 func (t *Arith) String(args *Args, reply *string) error {
 	*reply = fmt.Sprintf("%d+%d=%d", args.A, args.B, args.A+args.B)
 	return nil
@@ -98,6 +74,14 @@ func (t *Arith) Error(args *Args, reply *Reply) error {
 	panic("ERROR")
 }
 
+func (t *Arith) Callback(args *Args, h *EventHandler) error {
+	c := args.A + args.B
+	log.Println(h)
+	f := *h
+	f(c)
+	return nil
+}
+
 func listenTCP() (net.Listener, string) {
 	l, e := net.Listen("tcp", "127.0.0.1:0") // any available address
 	if e != nil {
@@ -109,8 +93,6 @@ func listenTCP() (net.Listener, string) {
 func startServer() {
 	Register(new(Arith))
 	RegisterName("net.rpc.Arith", new(Arith))
-	pub = new(Pub)
-	Register(pub)
 
 	var l net.Listener
 	l, serverAddr = listenTCP()
@@ -126,7 +108,6 @@ func startNewServer() {
 	newServer.Register(new(Arith))
 	newServer.RegisterName("net.rpc.Arith", new(Arith))
 	newServer.RegisterName("newServer.Arith", new(Arith))
-	newServer.Register(pub)
 
 	var l net.Listener
 	l, newServerAddr = listenTCP()
@@ -197,31 +178,15 @@ func testRPC(t *testing.T, addr string) {
 	addReply := new(Reply)
 	addCall := client.Go("Arith.Add", args, addReply, nil)
 
-	var n int = 10
-	go pub.fib()
-	//
-	_, err = client.Sub("Pub.Fib", n, &n, func(v interface{}) {
+	var n int
+	_, err = client.Sub("Arith.Callback", args, &n, func(v interface{}) {
 		r := v.(*int)
 		log.Println("subscribe:", *r)
 	})
-	if pub == nil {
-		panic("@@@@@@@@@@")
-	}
 	// client.Unsub("Pub.Fib", handle)
 	if err != nil {
 		t.Errorf("expected error is not right: %s", err.Error())
 	}
-
-	fibCall := client.GoSub("Pub.Fib", 0, &n, nil, func(v interface{}) {
-		r := v.(*int)
-		log.Println("GoSub:", *r)
-	})
-	fibCall = <-fibCall.Done
-	if fibCall.Error != nil {
-		t.Errorf("expected error is not right: %s", fibCall.Error.Error())
-	}
-
-	// client.Unsub(handle)
 
 	log.Println("client Sub end")
 
