@@ -27,13 +27,12 @@ var ErrShutdown = errors.New("connection is shut down")
 
 // Call represents an active RPC.
 type Call struct {
-	ServiceMethod string              // The name of the service and method to call.
-	Args          interface{}         // The argument to the function (*struct).
-	Reply         interface{}         // The reply from the function (*struct).
-	Error         error               // After completion, the error status.
-	Done          chan *Call          // Strobes when call is complete.
-	callBack      func(v interface{}) // subscribe's CallBack function
-	Seq           uint64              // == send to server request's seq
+	ServiceMethod string       // The name of the service and method to call.
+	Args          interface{}  // The argument to the function (*struct).
+	Reply         interface{}  // The reply from the function (*struct).
+	Error         error        // After completion, the error status.
+	Done          chan *Call   // Strobes when call is complete.
+	handler       EventHandler // subscribe's CallBack function
 }
 
 // Client represents an RPC Client.
@@ -83,14 +82,13 @@ func (client *Client) send(call *Call) {
 	seq := client.seq
 	client.seq++
 	client.pending[seq] = call
-	call.Seq = seq
 	client.mutex.Unlock()
 
 	// Encode and send the request.
 	client.request.Seq = seq
 	client.request.ServiceMethod = call.ServiceMethod
 	req := client.request
-	req.IsSub = call.callBack != nil
+	req.IsSub = call.handler != nil
 	err := client.codec.WriteRequest(&req, call.Args)
 	if err != nil {
 		client.mutex.Lock()
@@ -116,7 +114,7 @@ func (client *Client) input() {
 		seq := response.Seq
 		client.mutex.Lock()
 		call := client.pending[seq]
-		if call != nil && call.callBack == nil {
+		if call != nil && call.handler == nil {
 			delete(client.pending, seq)
 		}
 		client.mutex.Unlock()
@@ -142,7 +140,14 @@ func (client *Client) input() {
 				err = errors.New("reading error body: " + err.Error())
 			}
 
-			call.done()
+			if call.handler != nil {
+				client.mutex.Lock()
+				delete(client.pending, seq)
+				client.mutex.Unlock()
+				call.handler(nil, call.Error)
+			} else {
+				call.done()
+			}
 		default:
 			err = client.codec.ReadResponseBody(call.Reply)
 			if err != nil {
@@ -150,8 +155,8 @@ func (client *Client) input() {
 			}
 			call.done()
 
-			if call.callBack != nil {
-				call.callBack(call.Reply)
+			if call.handler != nil {
+				call.handler(call.Reply, nil)
 			}
 		}
 	}
@@ -303,7 +308,7 @@ func (client *Client) Go(serviceMethod string, args interface{}, reply interface
 	return client.gogo(serviceMethod, args, reply, done, nil)
 }
 
-func (client *Client) gogo(serviceMethod string, args interface{}, reply interface{}, done chan *Call, callBack func(data interface{})) *Call {
+func (client *Client) gogo(serviceMethod string, args interface{}, reply interface{}, done chan *Call, h EventHandler) *Call {
 	call := new(Call)
 	call.ServiceMethod = serviceMethod
 	call.Args = args
@@ -320,7 +325,7 @@ func (client *Client) gogo(serviceMethod string, args interface{}, reply interfa
 		}
 	}
 
-	call.callBack = callBack
+	call.handler = h
 	call.Done = done
 	client.send(call)
 	return call
@@ -332,7 +337,7 @@ func (client *Client) Call(serviceMethod string, args interface{}, reply interfa
 	return call.Error
 }
 
-func (client *Client) Sub(serviceMethod string, args interface{}, reply interface{}, callback func(v interface{})) error {
-	call := <-client.gogo(serviceMethod, args, reply, make(chan *Call, 1), callback).Done
+func (client *Client) Sub(serviceMethod string, args interface{}, reply interface{}, h EventHandler) error {
+	call := <-client.gogo(serviceMethod, args, reply, make(chan *Call, 1), h).Done
 	return call.Error
 }

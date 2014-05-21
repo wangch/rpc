@@ -442,12 +442,15 @@ func (s *service) sub(server *Server, sending *sync.Mutex, mtype *methodType, re
 	mtype.Unlock()
 	function := mtype.method.Func
 	// Invoke the method
-	f := func(v interface{}) {
-		server.sendResponse(sending, req, v, codec, "")
+	f := func(v interface{}, err error) {
+		if err == nil {
+			server.sendResponse(sending, req, v, codec, "")
+		} else {
+			server.sendResponse(sending, req, nil, codec, err.Error())
+		}
 	}
 	h := EventHandler(f)
 	callback := reflect.ValueOf(&h)
-	log.Println(callback, function)
 	returnValues := function.Call([]reflect.Value{s.rcvr, argv, callback})
 
 	// The return value for the method is an error.

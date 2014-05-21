@@ -78,7 +78,7 @@ func (t *Arith) Callback(args *Args, h *EventHandler) error {
 	c := args.A + args.B
 	log.Println(h)
 	f := *h
-	f(c)
+	f(c, nil)
 	return nil
 }
 
@@ -100,7 +100,7 @@ func startServer() {
 	go Accept(l)
 
 	HandleHTTP()
-	httpOnce.Do(startHttpServer)
+	// httpOnce.Do(startHttpServer)
 }
 
 func startNewServer() {
@@ -127,8 +127,8 @@ func startHttpServer() {
 func TestRPC(t *testing.T) {
 	once.Do(startServer)
 	testRPC(t, serverAddr)
-	newOnce.Do(startNewServer)
-	testRPC(t, newServerAddr)
+	// newOnce.Do(startNewServer)
+	// testRPC(t, newServerAddr)
 	// testNewServerRPC(t, newServerAddr)
 }
 
@@ -179,7 +179,7 @@ func testRPC(t *testing.T, addr string) {
 	addCall := client.Go("Arith.Add", args, addReply, nil)
 
 	var n int
-	_, err = client.Sub("Arith.Callback", args, &n, func(v interface{}) {
+	err = client.Sub("Arith.Callback", args, &n, func(v interface{}) {
 		r := v.(*int)
 		log.Println("subscribe:", *r)
 	})

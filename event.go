@@ -4,7 +4,7 @@ import (
 	"sync"
 )
 
-type EventHandler func(v interface{})
+type EventHandler func(v interface{}, err error)
 
 type Event struct {
 	sync.Mutex
@@ -32,7 +32,7 @@ func (e *Event) publish(v interface{}) {
 	defer e.Unlock()
 	for _, handler := range e.handlers {
 		if handler != nil {
-			handler(v)
+			handler(v, nil)
 		}
 	}
 }
