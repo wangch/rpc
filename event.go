@@ -4,7 +4,7 @@ import (
 	"sync"
 )
 
-type EventHandler func(v interface{}, err error)
+type EventHandler func(v interface{}, err error) error
 
 type Event struct {
 	sync.Mutex
@@ -30,9 +30,18 @@ func (e *Event) Detach(handle int) {
 func (e *Event) publish(v interface{}) {
 	e.Lock()
 	defer e.Unlock()
-	for _, handler := range e.handlers {
+	for k, handler := range e.handlers {
 		if handler != nil {
-			handler(v, nil)
+			k := k
+			handler := handler
+			go func() {
+				err := handler(v, nil)
+				if err != nil {
+					e.Lock()
+					delete(e.handlers, k)
+					e.Unlock()
+				}
+			}()
 		}
 	}
 }

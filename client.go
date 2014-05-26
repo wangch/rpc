@@ -156,10 +156,18 @@ func (client *Client) input() {
 			call.done()
 
 			if call.handler != nil {
-				call.handler(call.Reply, nil)
+				if err == nil {
+					call.handler(call.Reply, nil)
+				} else {
+					client.mutex.Lock()
+					delete(client.pending, seq)
+					client.mutex.Unlock()
+					call.handler(nil, call.Error)
+				}
 			}
 		}
 	}
+
 	// Terminate pending calls.
 	client.sending.Lock()
 	client.mutex.Lock()

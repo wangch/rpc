@@ -411,7 +411,7 @@ func suitableMethods(typ reflect.Type, reportErr bool) map[string]*methodType {
 // contains an error when it is used.
 var invalidRequest = struct{}{}
 
-func (server *Server) sendResponse(sending *sync.Mutex, req *Request, reply interface{}, codec ServerCodec, errmsg string) {
+func (server *Server) sendResponse(sending *sync.Mutex, req *Request, reply interface{}, codec ServerCodec, errmsg string) error {
 	resp := server.getResponse()
 	// Encode the response header
 	resp.ServiceMethod = req.ServiceMethod
@@ -422,11 +422,12 @@ func (server *Server) sendResponse(sending *sync.Mutex, req *Request, reply inte
 	resp.Seq = req.Seq
 	sending.Lock()
 	err := codec.WriteResponse(resp, reply)
-	if debugLog && err != nil {
+	if debugLog && err != nil { //
 		log.Println("rpc: writing response:", err)
 	}
 	sending.Unlock()
 	server.freeResponse(resp)
+	return err
 }
 
 func (m *methodType) NumCalls() (n uint) {
@@ -441,12 +442,16 @@ func (s *service) sub(server *Server, sending *sync.Mutex, mtype *methodType, re
 	mtype.numCalls++
 	mtype.Unlock()
 	function := mtype.method.Func
+	seq := req.Seq
+	method := req.ServiceMethod
 	// Invoke the method
-	f := func(v interface{}, err error) {
+	f := func(v interface{}, err error) error {
+		req.Seq = seq
+		req.ServiceMethod = method
 		if err == nil {
-			server.sendResponse(sending, req, v, codec, "")
+			return server.sendResponse(sending, req, v, codec, "")
 		} else {
-			server.sendResponse(sending, req, nil, codec, err.Error())
+			return server.sendResponse(sending, req, nil, codec, err.Error())
 		}
 	}
 	h := EventHandler(f)
