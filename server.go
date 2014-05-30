@@ -460,15 +460,15 @@ func (s *service) sub(server *Server, sending *sync.Mutex, mtype *methodType, re
 
 	// The return value for the method is an error.
 	errInter := returnValues[0].Interface()
-	errmsg := ""
+	errmsg := errServerReturn.Error()
 	if errInter != nil {
 		errmsg = errInter.(error).Error()
 	}
-	if errmsg != "" {
-		server.sendResponse(sending, req, nil, codec, errmsg)
-	}
+	server.sendResponse(sending, req, nil, codec, errmsg)
 	server.freeRequest(req)
 }
+
+var errServerReturn = errors.New("Server return")
 
 func (s *service) call(server *Server, sending *sync.Mutex, mtype *methodType, req *Request, argv, replyv reflect.Value, codec ServerCodec) {
 	mtype.Lock()

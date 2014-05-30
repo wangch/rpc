@@ -1,6 +1,7 @@
 package rpc
 
 import (
+	"log"
 	"sync"
 )
 
@@ -37,6 +38,7 @@ func (e *Event) publish(v interface{}) {
 			go func() {
 				err := handler(v, nil)
 				if err != nil {
+					log.Println("Event.publish error:", err)
 					e.Lock()
 					delete(e.handlers, k)
 					e.Unlock()

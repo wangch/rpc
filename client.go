@@ -119,6 +119,8 @@ func (client *Client) input() {
 		}
 		client.mutex.Unlock()
 
+		// log.Println(seq, call.ServiceMethod)
+
 		switch {
 		case call == nil:
 			// We've got no pending call. That usually means that
@@ -140,14 +142,17 @@ func (client *Client) input() {
 				err = errors.New("reading error body: " + err.Error())
 			}
 
-			if call.handler != nil {
-				client.mutex.Lock()
-				delete(client.pending, seq)
-				client.mutex.Unlock()
-				call.handler(nil, call.Error)
+			if response.Error == errServerReturn.Error() {
+				call.Error = nil
 			} else {
-				call.done()
+				if call.handler != nil {
+					client.mutex.Lock()
+					delete(client.pending, seq)
+					client.mutex.Unlock()
+					call.handler(nil, call.Error)
+				}
 			}
+			call.done()
 		default:
 			err = client.codec.ReadResponseBody(call.Reply)
 			if err != nil {
