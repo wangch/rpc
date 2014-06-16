@@ -16,10 +16,9 @@ type Event struct {
 func (e *Event) Attach(handler EventHandler) int {
 	e.Lock()
 	defer e.Unlock()
-	seq := e.seq
-	e.handlers[seq] = handler
 	e.seq++
-	return seq
+	e.handlers[e.seq] = handler
+	return e.seq
 }
 
 func (e *Event) Detach(handle int) {
@@ -33,17 +32,11 @@ func (e *Event) publish(v interface{}) {
 	defer e.Unlock()
 	for k, handler := range e.handlers {
 		if handler != nil {
-			k := k
-			handler := handler
-			go func() {
-				err := handler(v, nil)
-				if err != nil {
-					log.Println("Event.publish error:", err)
-					e.Lock()
-					delete(e.handlers, k)
-					e.Unlock()
-				}
-			}()
+			err := handler(v, nil)
+			if err != nil {
+				log.Println("Event.publish error:", err)
+				delete(e.handlers, k)
+			}
 		}
 	}
 }
@@ -55,6 +48,7 @@ type EventPublisher struct {
 func (p *EventPublisher) Event() *Event {
 	if p.event.handlers == nil {
 		p.event.handlers = make(map[int]EventHandler)
+		p.event.seq = 1024
 	}
 	return &p.event
 }
